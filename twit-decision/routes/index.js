@@ -1,65 +1,23 @@
-var path = require("path");
-var twit = require('twit');
-var sentimental = require('Sentimental');
-var config = require("../config");
+var path = require("path"),
+    twit = require('twit'),
+    sentimental = require('Sentimental'),
+    config = require("../config"),
+    Q = require('q'),
+    util = require('util');
 
-exports.index = function(req, res){
-  res.render('index', { title: "Twit-Decision"});
-};
+// establish the twitter config (grab your keys at dev.twitter.com)
+var twitter = new twit({
+  consumer_key: config.consumer_key,
+  consumer_secret: config.consumer_secret,
+  access_token: config.access_token,
+  access_token_secret: config.access_token_secret
+});
 
-exports.ping = function(req, res){
-  res.send("pong!", 200);
-};
+/*
+* Helper Functions
+*/
 
-exports.search = function(req, res) {
-  // grab the request from the client
-  var choices = JSON.parse(req.body.choices);
-  // grab the current date
-  var today = new Date();
-  // establish the twitter config (grab your keys at dev.twitter.com)
-  var twitter = new twit({
-    consumer_key: config.consumer_key,
-    consumer_secret: config.consumer_secret,
-    access_token: config.access_token,
-    access_token_secret: config.access_token_secret
-  });
-  // set highest score
-  var highestScore = -Infinity;
-  // set highest choice
-  var highestChoice = null;
-  // create new array
-  var array = [];
-  // set score
-  var score = 0;
-  console.log("----------")
-
-  // iterate through the choices array from the request
-  for(var i = 0; i < choices.length; i++) {
-    (function(i) {
-    // add choice to new array
-    array.push(choices[i])
-    // grad 20 tweets from today
-    twitter.get('search/tweets', {q: '' + choices[i] + ' since:' + today.getFullYear() + '-' + 
-      (today.getMonth() + 1) + '-' + today.getDate(), count:20}, function(err, data) {
-        // perfrom sentiment analysis (see below)
-        score = performAnalysis(data['statuses']);
-        console.log("score:", score)
-        console.log("choice:", choices[i])
-        //  determine winner
-        if(score > highestScore) {
-          highestScore = score;
-          highestChoice = choices[i];
-          console.log("winner:",choices[i])
-        }
-        console.log("")
-      });
-    })(i)
-  }
-  // send response back to the server side; why the need for the timeout?
-  setTimeout(function() { res.end(JSON.stringify({'score': highestScore, 'choice': highestChoice})) }, 5000);	
-};
-
-function performAnalysis(tweetSet) {
+var performAnalysis = function (tweetSet) {
   //set a results variable
   var results = 0;
   // iterate through the tweets, pulling the text, retweet count, and favorite count
@@ -95,5 +53,100 @@ function performAnalysis(tweetSet) {
   }
   // return score
   results = results / tweetSet.length;
-  return results
-}
+  return results;
+};
+
+// Searches the tweets, scores them, and returns a promise of that data
+var searchTweets = function(choice) {
+  var deferred = Q.defer(),
+      today = new Date(),
+      dateString = today.getFullYear() + '-' + (today.getMonth() + 1) + '-' + today.getDate(),
+      choiceData = {},
+      score = 0;
+
+  twitter.get('search/tweets',
+  {
+    q: '' + choice + ' since:' + dateString,
+    count: 20
+  }, function(err, data) {
+      if (err) {
+        deferred.reject(new Error(err));
+      } else {
+        // perfrom sentiment analysis (see below)
+        score = performAnalysis(data['statuses']);
+        console.log("score:", score);
+        console.log("choice:", choice);
+        
+        choiceData['choice'] = choice;
+        choiceData['score'] = score;
+        deferred.resolve(choiceData);
+      }
+      console.log("");
+    });
+  return deferred.promise;
+};
+
+// Compares the scores of the two choices and returns the highest score
+var scoreCompare = function(choices){
+  var highestScore = -Infinity,
+      highestChoice = null,
+      result = {};
+
+  choices.forEach(function(choice) {
+    if(choice['score'] > highestScore) {
+      highestScore = choice['score'];
+      highestChoice = choice['choice'];
+      console.log("winner:", highestChoice);
+      result = {
+        choice : highestChoice,
+        score : highestScore
+      };
+    }
+  });
+  return result;
+};
+
+/*
+* Export Routing Functions
+*/
+
+exports.index = function(req, res) {
+  res.render('index', { title: "Twit-Decision" });
+};
+
+exports.ping = function(req, res) {
+  res.send("pong!", 200);
+};
+
+exports.search = function(req, res) {
+  var choices = JSON.parse(req.body.choices),
+      choiceArray = [];
+
+  console.log("----------");
+
+  var promise = function(choices) {
+    var deferred = Q.defer();
+    choices.forEach(function(choice, index) {
+      searchTweets(choice)
+        .fail(function(error) {
+          throw new Error(error);
+        })
+        .done(function(data) {
+          choiceArray.push(data);
+          if (choiceArray.length === choices.length) {
+            deferred.resolve(choiceArray);
+          }
+        });
+    });
+    return deferred.promise;
+  };
+
+  promise(choices).then(function(data) {
+      return scoreCompare(data);
+    }).done(function(result) {
+      console.log('final_result', result);
+      res.send(result);
+    });
+
+};
+

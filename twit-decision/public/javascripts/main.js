@@ -37,15 +37,15 @@ $(function () {
       if($("#choice1").val() != $("#choice2").val()) {
         // send values to server side for processing, wait for callback, getting AJAXy
         $.post('/search', {'choices': JSON.stringify(choices)}, function(data) {
-          data = JSON.parse(data);
           // append data to the DOM
-          $(".form-container").hide()
+          console.log(data);
+          $(".form-container").hide();
           $("#status").text("and the winner is ...");
           $("#decision-text").text(data['choice']);
           $("#score").text('... with a score of ' + data['score'] + '');
           $("#decision-text").fadeIn();
           $("#score").fadeIn();
-          $("#again").show()
+          $("#again").show();
         });
       } else {
         // error code
